@@ -1023,19 +1023,33 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             if result.isError:
                 error_text = ""
                 for block in (result.content or []):
-                    if hasattr(block, "text"):
-                        error_text += block.text
+                    text = getattr(block, "text", None)
+                    if text:
+                        error_text += text
+                        continue
+                    resource = getattr(block, "resource", None)
+                    resource_text = getattr(resource, "text", None) if resource is not None else None
+                    if resource_text:
+                        error_text += resource_text
                 return json.dumps({
                     "error": _sanitize_error(
                         error_text or "MCP tool returned an error"
                     )
                 })
 
-            # Collect text from content blocks
+            # Collect text from content blocks. Some MCP servers, including qmd,
+            # return EmbeddedResource/TextResourceContents where the payload
+            # lives under block.resource.text instead of block.text.
             parts: List[str] = []
             for block in (result.content or []):
-                if hasattr(block, "text"):
-                    parts.append(block.text)
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(text)
+                    continue
+                resource = getattr(block, "resource", None)
+                resource_text = getattr(resource, "text", None) if resource is not None else None
+                if resource_text:
+                    parts.append(resource_text)
             return json.dumps({"result": "\n".join(parts) if parts else ""})
 
         try:
