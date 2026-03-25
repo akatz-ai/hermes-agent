@@ -1988,9 +1988,16 @@ class DiscordAdapter(BasePlatformAdapter):
     async def _build_reference_injection(self, message: DiscordMessage) -> Optional[str]:
         """Inject quoted reply or forwarded-message context into inbound text."""
         blocks: List[str] = []
+        reference = getattr(message, "reference", None)
+        snapshots = list(getattr(message, "message_snapshots", []) or [])
+        reference_type = getattr(reference, "type", None)
+        is_forward = bool(snapshots) or (
+            reference_type is not None
+            and getattr(reference_type, "name", "").lower() == "forward"
+        )
 
         referenced = await self._resolve_referenced_message(message)
-        if referenced is not None:
+        if referenced is not None and not is_forward:
             channel_name = None
             try:
                 channel_name = f"#{referenced.channel.name}"
@@ -2007,7 +2014,6 @@ class DiscordAdapter(BasePlatformAdapter):
             if block:
                 blocks.append(block)
 
-        snapshots = list(getattr(message, "message_snapshots", []) or [])
         for snapshot in snapshots[:3]:
             block = self._format_referenced_payload(
                 label="Forwarded message",
