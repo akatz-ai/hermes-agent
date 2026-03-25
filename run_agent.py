@@ -931,49 +931,48 @@ class AIAgent:
         self._honcho_session_key = honcho_session_key
         self._honcho_config = None  # HonchoClientConfig | None
         self._honcho_exit_hook_registered = False
-        if not skip_memory:
-            try:
-                if honcho_manager is not None:
-                    hcfg = honcho_config or getattr(honcho_manager, "_config", None)
-                    self._honcho_config = hcfg
-                    if hcfg and self._honcho_should_activate(hcfg):
-                        self._honcho = honcho_manager
-                        self._activate_honcho(
-                            hcfg,
-                            enabled_toolsets=enabled_toolsets,
-                            disabled_toolsets=disabled_toolsets,
-                            session_db=session_db,
-                        )
+        try:
+            if honcho_manager is not None:
+                hcfg = honcho_config or getattr(honcho_manager, "_config", None)
+                self._honcho_config = hcfg
+                if hcfg and self._honcho_should_activate(hcfg):
+                    self._honcho = honcho_manager
+                    self._activate_honcho(
+                        hcfg,
+                        enabled_toolsets=enabled_toolsets,
+                        disabled_toolsets=disabled_toolsets,
+                        session_db=session_db,
+                    )
+            else:
+                from honcho_integration.client import HonchoClientConfig, get_honcho_client
+                hcfg = HonchoClientConfig.from_global_config()
+                self._honcho_config = hcfg
+                if self._honcho_should_activate(hcfg):
+                    from honcho_integration.session import HonchoSessionManager
+                    client = get_honcho_client(hcfg)
+                    self._honcho = HonchoSessionManager(
+                        honcho=client,
+                        config=hcfg,
+                        context_tokens=hcfg.context_tokens,
+                    )
+                    self._activate_honcho(
+                        hcfg,
+                        enabled_toolsets=enabled_toolsets,
+                        disabled_toolsets=disabled_toolsets,
+                        session_db=session_db,
+                    )
                 else:
-                    from honcho_integration.client import HonchoClientConfig, get_honcho_client
-                    hcfg = HonchoClientConfig.from_global_config()
-                    self._honcho_config = hcfg
-                    if self._honcho_should_activate(hcfg):
-                        from honcho_integration.session import HonchoSessionManager
-                        client = get_honcho_client(hcfg)
-                        self._honcho = HonchoSessionManager(
-                            honcho=client,
-                            config=hcfg,
-                            context_tokens=hcfg.context_tokens,
-                        )
-                        self._activate_honcho(
-                            hcfg,
-                            enabled_toolsets=enabled_toolsets,
-                            disabled_toolsets=disabled_toolsets,
-                            session_db=session_db,
-                        )
+                    if not hcfg.enabled:
+                        logger.debug("Honcho disabled in global config")
+                    elif not hcfg.api_key:
+                        logger.debug("Honcho enabled but no API key configured")
                     else:
-                        if not hcfg.enabled:
-                            logger.debug("Honcho disabled in global config")
-                        elif not hcfg.api_key:
-                            logger.debug("Honcho enabled but no API key configured")
-                        else:
-                            logger.debug("Honcho enabled but missing API key or disabled in config")
-            except Exception as e:
-                logger.warning("Honcho init failed — memory disabled: %s", e)
-                print(f"  Honcho init failed: {e}")
-                print("  Run 'hermes honcho setup' to reconfigure.")
-                self._honcho = None
+                        logger.debug("Honcho enabled but missing API key or disabled in config")
+        except Exception as e:
+            logger.warning("Honcho init failed — memory disabled: %s", e)
+            print(f"  Honcho init failed: {e}")
+            print("  Run 'hermes honcho setup' to reconfigure.")
+            self._honcho = None
 
         # Tools are initially discovered before Honcho activation. If Honcho
         # stays inactive, remove any stale honcho_* tools from prior process state.

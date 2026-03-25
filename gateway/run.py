@@ -197,7 +197,15 @@ if _config_path.exists():
 os.environ["HERMES_QUIET"] = "1"
 
 # Enable interactive exec approval for dangerous commands on messaging platforms
-os.environ["HERMES_EXEC_ASK"] = "1"
+# unless the runtime config explicitly disables approvals.
+_approval_cfg = _cfg.get("approvals", {}) if isinstance(globals().get("_cfg"), dict) else {}
+_approval_mode = (
+    str(_approval_cfg.get("mode", "")).strip().lower()
+    if isinstance(_approval_cfg, dict)
+    else ""
+)
+if "HERMES_EXEC_ASK" not in os.environ and not os.getenv("HERMES_YOLO_MODE") and _approval_mode != "off":
+    os.environ["HERMES_EXEC_ASK"] = "1"
 
 # Set terminal working directory for messaging platforms.
 # If the user set an explicit path in config.yaml (not "." or "auto"),
