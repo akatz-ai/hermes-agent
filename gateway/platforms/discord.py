@@ -1890,6 +1890,140 @@ class DiscordAdapter(BasePlatformAdapter):
             self._bot_participated_threads.add(thread_id)
             self._save_participated_threads()
 
+    @staticmethod
+    def _truncate_context_text(text: str, max_chars: int = 4000) -> str:
+        """Trim injected reply/forward context to a bounded size."""
+        text = text.strip()
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3].rstrip() + "..."
+
+    @staticmethod
+    def _format_attachment_summary(attachments: List[Any]) -> Optional[str]:
+        """Summarize attachment filenames for injected context."""
+        names = [att.filename for att in attachments if getattr(att, "filename", None)]
+        if not names:
+            return None
+        return "Attachments: " + ", ".join(names)
+
+    @classmethod
+    def _format_referenced_payload(
+        cls,
+        *,
+        label: str,
+        author_name: Optional[str],
+        channel_name: Optional[str],
+        content: str,
+        attachments: List[Any],
+        created_at: Optional[Any] = None,
+    ) -> Optional[str]:
+        """Render referenced or forwarded Discord content into plain text."""
+        body_parts: List[str] = []
+        if content and content.strip():
+            body_parts.append(content.strip())
+        attachment_summary = cls._format_attachment_summary(attachments)
+        if attachment_summary:
+            body_parts.append(f"[{attachment_summary}]")
+        if not body_parts:
+            return None
+
+        header_bits = [label]
+        if author_name:
+            header_bits.append(f"from {author_name}")
+        if channel_name:
+            header_bits.append(f"in {channel_name}")
+        if created_at is not None:
+            try:
+                header_bits.append(f"at {created_at.isoformat()}")
+            except Exception:
+                pass
+
+        body = "\n".join(body_parts)
+        return f"[{' '.join(header_bits)}]:\n{cls._truncate_context_text(body)}"
+
+    async def _resolve_referenced_message(self, message: DiscordMessage) -> Optional[DiscordMessage]:
+        """Best-effort resolve of a replied-to Discord message."""
+        reference = getattr(message, "reference", None)
+        if not reference or not reference.message_id:
+            return None
+
+        resolved = getattr(reference, "resolved", None)
+        if isinstance(resolved, discord.Message):
+            return resolved
+
+        cached = getattr(reference, "cached_message", None)
+        if isinstance(cached, discord.Message):
+            return cached
+
+        channel = getattr(message, "channel", None)
+        if (
+            channel is not None
+            and getattr(reference, "channel_id", None) == getattr(channel, "id", None)
+            and hasattr(channel, "fetch_message")
+        ):
+            try:
+                return await channel.fetch_message(reference.message_id)
+            except Exception as e:
+                logger.debug("Could not fetch reply target from current channel: %s", e)
+
+        client = self._client
+        target_channel = None
+        if client and getattr(reference, "channel_id", None):
+            target_channel = client.get_channel(reference.channel_id)
+            if target_channel is None:
+                try:
+                    target_channel = await client.fetch_channel(reference.channel_id)
+                except Exception as e:
+                    logger.debug("Could not fetch reply target channel %s: %s", reference.channel_id, e)
+                    target_channel = None
+
+        if target_channel is not None and hasattr(target_channel, "fetch_message"):
+            try:
+                return await target_channel.fetch_message(reference.message_id)
+            except Exception as e:
+                logger.debug("Could not fetch reply target message %s: %s", reference.message_id, e)
+
+        return None
+
+    async def _build_reference_injection(self, message: DiscordMessage) -> Optional[str]:
+        """Inject quoted reply or forwarded-message context into inbound text."""
+        blocks: List[str] = []
+
+        referenced = await self._resolve_referenced_message(message)
+        if referenced is not None:
+            channel_name = None
+            try:
+                channel_name = f"#{referenced.channel.name}"
+            except Exception:
+                pass
+            block = self._format_referenced_payload(
+                label="Reply context",
+                author_name=getattr(referenced.author, "display_name", None) or getattr(referenced.author, "name", None),
+                channel_name=channel_name,
+                content=getattr(referenced, "content", "") or "",
+                attachments=list(getattr(referenced, "attachments", []) or []),
+                created_at=getattr(referenced, "created_at", None),
+            )
+            if block:
+                blocks.append(block)
+
+        snapshots = list(getattr(message, "message_snapshots", []) or [])
+        for snapshot in snapshots[:3]:
+            block = self._format_referenced_payload(
+                label="Forwarded message",
+                author_name=None,
+                channel_name=None,
+                content=getattr(snapshot, "content", "") or "",
+                attachments=list(getattr(snapshot, "attachments", []) or []),
+                created_at=getattr(snapshot, "created_at", None),
+            )
+            if block:
+                blocks.append(block)
+
+        if not blocks:
+            return None
+        return "\n\n".join(blocks)
+
     async def _handle_message(self, message: DiscordMessage) -> None:
         """Handle incoming Discord messages."""
         # In server channels (not DMs), require the bot to be @mentioned
@@ -2001,7 +2135,7 @@ class DiscordAdapter(BasePlatformAdapter):
         # vision tool can access them reliably (Discord CDN URLs can expire).
         media_urls = []
         media_types = []
-        pending_text_injection: Optional[str] = None
+        pending_text_injection: Optional[str] = await self._build_reference_injection(message)
         for att in message.attachments:
             content_type = att.content_type or "unknown"
             if content_type.startswith("image/"):
