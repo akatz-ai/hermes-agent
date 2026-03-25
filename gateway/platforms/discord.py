@@ -531,9 +531,14 @@ class DiscordAdapter(BasePlatformAdapter):
                 if message.author == self._client.user:
                     return
                 
-                # Ignore Discord system messages (thread renames, pins, member joins, etc.)
-                # Allow both default and reply types — replies have a distinct MessageType.
-                if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+                # Ignore most Discord system messages (thread renames, pins, member joins, etc.)
+                # but keep reply and thread starter events since they carry user-authored
+                # conversation content via message.reference / referenced_message.
+                if message.type not in (
+                    discord.MessageType.default,
+                    discord.MessageType.reply,
+                    discord.MessageType.thread_starter_message,
+                ):
                     return
                 
                 # Bot message filtering (DISCORD_ALLOW_BOTS):
