@@ -2136,7 +2136,13 @@ class AIAgent:
         self._honcho_exit_hook_registered = True
 
     def _queue_honcho_prefetch(self, user_message: str) -> None:
-        """Queue turn-end Honcho prefetch so the next turn can consume cached results."""
+        """Queue turn-end Honcho context prefetch for the next turn.
+
+        Automatic turn injection intentionally excludes dialectic continuity
+        synthesis because it is higher-variance and can pollute otherwise
+        straightforward turns. Explicit honcho_* tools remain available when
+        the agent wants deeper synthesized recall.
+        """
         if not self._honcho or not self._honcho_session_key:
             return
 
@@ -2146,12 +2152,15 @@ class AIAgent:
 
         try:
             self._honcho.prefetch_context(self._honcho_session_key, user_message)
-            self._honcho.prefetch_dialectic(self._honcho_session_key, user_message or "What were we working on?")
         except Exception as exc:
             logger.debug("Honcho background prefetch failed (non-fatal): %s", exc)
 
     def _honcho_prefetch(self, user_message: str) -> str:
-        """Assemble the first-turn Honcho context from the pre-warmed cache."""
+        """Assemble automatic Honcho context from the pre-warmed cache.
+
+        Only stable representation/card material is auto-injected. Dialectic
+        continuity synthesis is left to explicit Honcho tool calls.
+        """
         if not self._honcho or not self._honcho_session_key:
             return ""
         try:
@@ -2172,16 +2181,16 @@ class AIAgent:
                 if ai_card:
                     parts.append(ai_card)
 
-            dialectic = self._honcho.pop_dialectic_result(self._honcho_session_key)
-            if dialectic:
-                parts.append(f"## Continuity synthesis\n{dialectic}")
+            # Clear any stale prefetched dialectic result so it does not
+            # accumulate across turns when auto-injection is disabled.
+            self._honcho.pop_dialectic_result(self._honcho_session_key)
 
             if not parts:
                 return ""
             header = (
                 "# Honcho Memory (persistent cross-session context)\n"
-                "Use this to answer questions about the user, prior sessions, "
-                "and what you were working on together. Do not call tools to "
+                "Use this to answer questions about the user and persistent "
+                "cross-session context. Do not call tools to "
                 "look up information that is already present here.\n"
             )
             return header + "\n\n".join(parts)
